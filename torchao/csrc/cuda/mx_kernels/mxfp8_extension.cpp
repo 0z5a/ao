@@ -10,6 +10,7 @@
 #include <torch/headeronly/util/shim_utils.h>
 
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -272,10 +273,11 @@ Tensor mx_block_rearrange_2d_M_groups(
   return output;
 }
 
-std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups(
+std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups_impl(
     Tensor inputs,
     Tensor group_end_offsets,
-    int64_t alignment_size) {
+    int64_t alignment_size,
+    bool compact) {
 
   // Validate inputs
   check_cuda_tensor(inputs, "inputs");
@@ -323,6 +325,10 @@ std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups(
   // (required for quantization operations that expect aligned dimensions)
   int output_rows = num_tokens + num_groups * alignment_size;
   output_rows = ((output_rows + alignment_size - 1) / alignment_size) * alignment_size;
+  if (compact && num_tokens > 0) {
+    const int nonempty = std::min(num_tokens, num_groups);
+    output_rows = alignment_size * (nonempty + (num_tokens - nonempty) / alignment_size);
+  }
 
   // Allocate zero-initialized output (zeros for padding required by quantization)
   Tensor output = torch::stable::new_zeros(inputs, {output_rows, dim}, inputs.scalar_type());
@@ -351,6 +357,16 @@ std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups(
   }
 
   return std::make_tuple(output, padded_group_start_offsets, padded_group_end_offsets);
+}
+
+std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups(
+    Tensor inputs, Tensor group_end_offsets, int64_t alignment_size) {
+  return fused_pad_token_groups_impl(inputs, group_end_offsets, alignment_size, false);
+}
+
+std::tuple<Tensor, Tensor, Tensor> fused_pad_token_groups_compact(
+    Tensor inputs, Tensor group_end_offsets, int64_t alignment_size) {
+  return fused_pad_token_groups_impl(inputs, group_end_offsets, alignment_size, true);
 }
 
 Tensor fused_unpad_token_groups(
@@ -431,5 +447,6 @@ STABLE_TORCH_LIBRARY_IMPL(torchao, CUDA, m) {
   m.impl("mxfp8_quantize", TORCH_BOX(&mxfp8::mxfp8_quantize));
   m.impl("mx_block_rearrange_2d_M_groups", TORCH_BOX(&mxfp8::mx_block_rearrange_2d_M_groups));
   m.impl("fused_pad_token_groups", TORCH_BOX(&mxfp8::fused_pad_token_groups));
+  m.impl("fused_pad_token_groups_compact", TORCH_BOX(&mxfp8::fused_pad_token_groups_compact));
   m.impl("fused_unpad_token_groups", TORCH_BOX(&mxfp8::fused_unpad_token_groups));
 }

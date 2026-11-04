@@ -1,6 +1,8 @@
 from torchao.prototype.moe_training.kernels.mxfp8.quant import (
+    _mxfp8_compact_cuda_available,  # noqa: F401
     _mxfp8_cuda_kernels_available,  # noqa: F401
     _mxfp8_flydsl_kernels_available,  # noqa: F401
+    fused_pad_token_groups_compact_cuda,  # noqa: F401
     fused_pad_token_groups_cuda,  # noqa: F401
     fused_unpad_token_groups_cuda,  # noqa: F401
     mx_block_rearrange_2d_M_groups_cuda,  # noqa: F401

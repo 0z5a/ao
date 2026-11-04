@@ -414,6 +414,7 @@ def pad_token_groups(
     group_end_offsets: torch.Tensor,
     alignment_size: int = 32,
     kernel_preference: Optional[KernelPreference] = KernelPreference.AUTO,
+    compact: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Pad token groups to the next multiple of alignment_size.
@@ -423,12 +424,15 @@ def pad_token_groups(
         group_end_offsets: End index of each token group, shape (E,)
         alignment_size: Alignment size for padding (typically 32 for MXFP8, 16 for FP8)
         kernel_preference: Kernel preference (AUTO uses CUDA if available, EMULATED uses torch)
+        compact: Use the compact CUDA allocation when the native extension provides it.
 
     Returns:
         tuple: (padded_input_act, padded_group_start_offsets, padded_group_end_offsets)
     """
     from torchao.prototype.moe_training.kernels.mxfp8 import (
+        _mxfp8_compact_cuda_available,
         _mxfp8_cuda_kernels_available,
+        fused_pad_token_groups_compact_cuda,
         fused_pad_token_groups_cuda,
         torch_pad_token_groups,
     )
@@ -438,7 +442,12 @@ def pad_token_groups(
         kernel_preference != KernelPreference.EMULATED and _mxfp8_cuda_kernels_available
     )
 
-    pad_groups_fn = fused_pad_token_groups_cuda if use_cuda else torch_pad_token_groups
+    if use_cuda and compact and _mxfp8_compact_cuda_available:
+        pad_groups_fn = fused_pad_token_groups_compact_cuda
+    else:
+        pad_groups_fn = (
+            fused_pad_token_groups_cuda if use_cuda else torch_pad_token_groups
+        )
 
     padded_input_act, padded_group_start_offsets, padded_group_end_offsets = (
         pad_groups_fn(input_act, group_end_offsets, alignment_size=alignment_size)

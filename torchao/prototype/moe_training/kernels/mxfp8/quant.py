@@ -985,6 +985,7 @@ _mxfp8_cuda_kernels_available = (
     and is_cuda_version_at_least(12, 8)
     and _has_cuda_dispatch_kernel("torchao::mx_block_rearrange_2d_M_groups")
 )
+_mxfp8_compact_cuda_available = False
 _mxfp8_cutedsl_kernels_available = (
     _is_sm_10x() and is_cuda_version_at_least(12, 8) and _cutedsl_runtime_available()
 )
@@ -1331,6 +1332,13 @@ if _mxfp8_cuda_kernels_available:
         "fused_pad_token_groups(Tensor inputs, Tensor offsets, int alignment_size) -> (Tensor, Tensor, Tensor)",
         tags=[torch._C.Tag.needs_fixed_stride_order],
     )
+    _lib_mxfp8.define(
+        "fused_pad_token_groups_compact(Tensor inputs, Tensor offsets, int alignment_size) -> (Tensor, Tensor, Tensor)",
+        tags=[torch._C.Tag.needs_fixed_stride_order],
+    )
+    _mxfp8_compact_cuda_available = _has_cuda_dispatch_kernel(
+        "torchao::fused_pad_token_groups_compact"
+    )
 
     def fused_pad_token_groups_cuda(
         inputs: torch.Tensor,
@@ -1368,6 +1376,20 @@ if _mxfp8_cuda_kernels_available:
             alignment_size,
         )
 
+    def fused_pad_token_groups_compact_cuda(
+        inputs: torch.Tensor,
+        offsets: torch.Tensor,
+        alignment_size: int = 32,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert inputs.ndim == 2, "input activations must be 2d"
+        assert inputs.dtype in (torch.float32, torch.bfloat16), (
+            "inputs must be float32 or bfloat16"
+        )
+        assert offsets.dtype == torch.int32, "offsets must be int32"
+        return torch.ops.torchao.fused_pad_token_groups_compact.default(
+            inputs, offsets, alignment_size
+        )
+
     @torch.library.register_fake("torchao::fused_pad_token_groups")
     def _fake_fused_pad_token_groups_cuda(
         inputs: torch.Tensor,
@@ -1400,6 +1422,29 @@ if _mxfp8_cuda_kernels_available:
         padded_group_start_offsets = padded_offsets - padded_sizes
 
         return padded_tokens, padded_group_start_offsets, padded_offsets
+
+    @torch.library.register_fake("torchao::fused_pad_token_groups_compact")
+    def _fake_fused_pad_token_groups_compact_cuda(
+        inputs: torch.Tensor,
+        offsets: torch.Tensor,
+        alignment_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        num_tokens, dim = inputs.shape
+        num_groups = offsets.shape[0]
+        if num_tokens == 0:
+            output_rows = num_groups * alignment_size
+        else:
+            nonempty = torch.sym_min(num_tokens, num_groups)
+            output_rows = alignment_size * (
+                nonempty + (num_tokens - nonempty) // alignment_size
+            )
+        padded_tokens = inputs.new_empty((output_rows, dim))
+        group_sizes = torch.diff(offsets, prepend=offsets.new_zeros(1))
+        padded_sizes = (
+            (group_sizes + alignment_size - 1) // alignment_size
+        ) * alignment_size
+        padded_offsets = torch.cumsum(padded_sizes, 0, dtype=torch.int32)
+        return padded_tokens, padded_offsets - padded_sizes, padded_offsets
 
     # CUDA kernel for fused unpadding of token groups
     _lib_mxfp8.define(
@@ -1482,6 +1527,15 @@ else:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError(
             "fused_pad_token_groups_cuda is not implemented on this device"
+        )
+
+    def fused_pad_token_groups_compact_cuda(
+        inputs: torch.Tensor,
+        offsets: torch.Tensor,
+        alignment_size: int = 32,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        raise NotImplementedError(
+            "fused_pad_token_groups_compact_cuda is not implemented on this device"
         )
 
     def fused_unpad_token_groups_cuda(

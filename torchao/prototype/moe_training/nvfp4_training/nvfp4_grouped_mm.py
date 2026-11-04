@@ -221,7 +221,7 @@ class _NVFP4GroupedMM(torch.autograd.Function):
                 group_end_offsets, prepend=group_end_offsets.new_zeros(1)
             )
             torch.ops.aten._assert_async.msg(
-                torch.all(group_sizes > 0), "offs must describe non-empty groups"
+                torch.all(group_sizes >= 0), "offs must be nondecreasing"
             )
             torch.ops.aten._assert_async.msg(
                 group_end_offsets[-1] <= num_tokens,
@@ -256,6 +256,7 @@ class _NVFP4GroupedMM(torch.autograd.Function):
                     input_act,
                     group_end_offsets,
                     alignment_size=_ALIGNMENT,
+                    compact=True,
                 )
             )
         else:
@@ -369,6 +370,7 @@ class _NVFP4GroupedMM(torch.autograd.Function):
                 grad_output,
                 original_group_end_offsets,
                 alignment_size=_ALIGNMENT,
+                compact=True,
             )
 
         num_experts = padded_group_end_offsets.numel()
